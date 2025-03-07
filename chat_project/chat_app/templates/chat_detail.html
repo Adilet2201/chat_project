@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Chat Detail</h2>
+<div class="border p-3 mb-3" style="height:300px; overflow-y: scroll;">
+  {% for message in messages %}
+    <div class="media mb-3">
+        {% if message.sender.profile_pic %}
+        <p>Debug URL: {{ message.sender.profile_pic.url }}</p>
+        <img src="{{ message.sender.profile_pic.url }}" alt="{{ message.sender.display_name }}"
+             class="mr-3" style="width:50px; height:50px; border-radius:50%; object-fit: cover;">
+      {% endif %}
+      
+      <div class="media-body">
+        <h5 class="mt-0">{{ message.sender.display_name }}</h5>
+        {% if message.content %}
+          <p>{{ message.content }}</p>
+        {% endif %}
+        {% if message.image %}
+          <img src="{{ message.image.url }}" alt="Image" style="max-width: 200px;">
+        {% endif %}
+        <small class="text-muted">{{ message.timestamp|date:"M d, Y H:i" }}</small>
+      </div>
+    </div>
+    <hr>
+  {% endfor %}
+</div>
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  <div class="form-group">
+    <textarea name="content" class="form-control" placeholder="Type your message..."></textarea>
+  </div>
+  <div class="form-group">
+    <input type="file" name="image" class="form-control-file">
+  </div>
+  <button type="submit" class="btn btn-primary">Send</button>
+</form>
+{% endblock %}

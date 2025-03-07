@@ -1,0 +1,20 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Your Chats</h2>
+<ul class="list-group">
+  {% for chat in chats %}
+    <li class="list-group-item">
+      <a href="{% url 'chat_detail' chat.id %}">
+        Chat with 
+        {% for participant in chat.participants.all %}
+          {% if participant != request.user.profile %}
+            {{ participant.display_name }}{% if not forloop.last %}, {% endif %}
+          {% endif %}
+        {% endfor %}
+      </a>
+    </li>
+  {% empty %}
+    <li class="list-group-item">No chats available.</li>
+  {% endfor %}
+</ul>
+{% endblock %}
