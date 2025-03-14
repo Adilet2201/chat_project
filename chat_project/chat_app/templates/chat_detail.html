@@ -5,7 +5,7 @@
   {% for message in messages %}
     <div class="media mb-3">
         {% if message.sender.profile_pic %}
-        <p>Debug URL: {{ message.sender.profile_pic.url }}</p>
+   
         <img src="{{ message.sender.profile_pic.url }}" alt="{{ message.sender.display_name }}"
              class="mr-3" style="width:50px; height:50px; border-radius:50%; object-fit: cover;">
       {% endif %}

@@ -18,7 +18,10 @@
     {% for profile in profiles %}
       <li class="list-group-item d-flex justify-content-between align-items-center">
         {{ profile.display_name }}
-        <a href="{% url 'start_or_resume_chat' profile.id %}" class="btn btn-primary btn-sm">Chat</a>
+        <div>
+          <a href="{% url 'start_or_resume_chat' profile.id %}" class="btn btn-primary btn-sm">Chat</a>
+          <a href="{% url 'add_close_friend' profile.id %}" class="btn btn-secondary btn-sm ml-2">Add as Close Friend</a>
+        </div>
       </li>
     {% endfor %}
   </ul>

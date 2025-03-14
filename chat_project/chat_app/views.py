@@ -2,8 +2,9 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from .forms import RegistrationForm, ProfileUpdateForm
-from .models import Chat, Message, Profile
+from .models import Chat, Message, Profile,Post
 from django.http import HttpResponse
+from django.db.models import Q
 
 def register(request):
     if request.method == 'POST':
@@ -70,3 +71,52 @@ def start_or_resume_chat(request, profile_id):
         chat = Chat.objects.create()
         chat.participants.add(my_profile, target_profile)
     return redirect('chat_detail', chat_id=chat.id)
+
+@login_required
+def set_last_chat(request, chat_id):
+    # Store the last visited chat id in session
+    request.session['last_chat_id'] = chat_id
+    return HttpResponse(f"Last chat set to {chat_id}")
+
+@login_required
+def get_last_chat(request):
+    last_chat = request.session.get('last_chat_id', None)
+    return HttpResponse(f"Last visited chat id is {last_chat}")
+
+@login_required
+def create_post(request):
+    if request.method == 'POST':
+        content = request.POST.get('content', '')
+        privacy = request.POST.get('privacy', 'public')
+        image = request.FILES.get('image')
+        if content or image:
+            Post.objects.create(
+                owner=request.user.profile,
+                content=content,
+                image=image,
+                privacy=privacy
+            )
+            return redirect('post_feed')
+    return render(request, 'create_post.html')
+
+@login_required
+def post_feed(request):
+    # Public posts: visible to everyone.
+    public_posts = Post.objects.filter(privacy='public')
+    
+    # Close friends posts: visible if the current user is in the owner's close_friends list or if the current user is the owner.
+    close_posts = Post.objects.filter(
+        privacy='close'
+    ).filter(
+        Q(owner__close_friends=request.user.profile) | Q(owner=request.user.profile)
+    )
+    
+    # Combine the querysets and order by newest first.
+    posts = (public_posts | close_posts).order_by('-created_at')
+    return render(request, 'post_feed.html', {'posts': posts})
+
+@login_required
+def add_close_friend(request, profile_id):
+    friend = get_object_or_404(Profile, id=profile_id)
+    request.user.profile.close_friends.add(friend)
+    return redirect('user_search')

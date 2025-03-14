@@ -15,12 +15,16 @@
     <form class="form-inline my-2 my-lg-0" method="get" action="{% url 'user_search' %}">
       <input class="form-control mr-sm-2" type="search" name="q" placeholder="Search Users" aria-label="Search">
       <button class="btn btn-outline-success my-2 my-sm-0" type="submit">Search</button>
+      <!-- Create Post button styled like the search button, with extra left margin -->
+      <a href="{% url 'create_post' %}" class="btn btn-outline-success my-2 my-sm-0 ml-3">Create Post</a>
     </form>
     
+    <!-- Navigation links -->
     <div class="collapse navbar-collapse" id="navbarNav">
       <ul class="navbar-nav ml-auto">
         {% if user.is_authenticated %}
           <li class="nav-item"><a class="nav-link" href="{% url 'chat_list' %}">Chats</a></li>
+          <li class="nav-item"><a class="nav-link" href="{% url 'post_feed' %}">Posts</a></li>
           <li class="nav-item"><a class="nav-link" href="{% url 'update_profile' %}">Profile</a></li>
           <li class="nav-item"><a class="nav-link" href="{% url 'logout' %}">Logout</a></li>
         {% else %}

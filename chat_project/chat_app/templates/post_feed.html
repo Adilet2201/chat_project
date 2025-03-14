@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Post Feed</h2>
+{% for post in posts %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <h5 class="card-title">{{ post.owner.display_name }}</h5>
+      <p class="card-text">{{ post.content }}</p>
+      {% if post.image %}
+        <img src="{{ post.image.url }}" alt="Post Image" style="max-width: 300px;">
+      {% endif %}
+      <p>
+        <small class="text-muted">{{ post.created_at|date:"M d, Y H:i" }}</small>
+        {% if post.privacy == 'close' %}
+          <span class="badge badge-info">Close Friends Only</span>
+        {% endif %}
+      </p>
+    </div>
+  </div>
+{% empty %}
+  <p>No posts to display.</p>
+{% endfor %}
+{% endblock %}
