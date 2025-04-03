@@ -1,120 +1,145 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
-from .forms import RegistrationForm, ProfileUpdateForm
-from .models import Chat, Message, Profile,Post
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.views.generic import ListView, DetailView, CreateView, UpdateView, View
+from django.urls import reverse_lazy
 from django.http import HttpResponse
 from django.db.models import Q
 
-def register(request):
-    if request.method == 'POST':
-        form = RegistrationForm(request.POST, request.FILES)
-        if form.is_valid():
-            user = form.save()
-            login(request, user)
-            return redirect('chat_list')
-    else:
-        form = RegistrationForm()
-    return render(request, 'registration/register.html', {'form': form})
+from django.contrib.auth.models import User
+from .forms import RegistrationForm, ProfileUpdateForm
+from .models import Chat, Message, Profile, Post
 
-@login_required
-def chat_list(request):
-    profile = request.user.profile
-    chats = profile.chats.all()
-    return render(request, 'chat_list.html', {'chats': chats})
+# --- Пример CBV для регистрации --- #
+class RegisterView(CreateView):
+    form_class = RegistrationForm
+    template_name = 'registration/register.html'
+    success_url = reverse_lazy('chat_list')
 
-@login_required
-def chat_detail(request, chat_id):
-    chat = get_object_or_404(Chat, id=chat_id)
-    if request.user.profile not in chat.participants.all():
-        return HttpResponse("You are not a participant of this chat.", status=403)
-    
-    if request.method == 'POST':
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        # Логиним пользователя сразу
+        login(self.request, self.object)
+        return response
+
+# --- Пример CBV для списка чатов --- #
+class ChatListView(LoginRequiredMixin, ListView):
+    model = Chat
+    template_name = 'chat_list.html'
+    context_object_name = 'chats'
+
+    def get_queryset(self):
+        return self.request.user.profile.chats.all()
+
+# --- Пример CBV для детального просмотра чата (со способностью принимать POST) --- #
+class ChatDetailView(LoginRequiredMixin, DetailView):
+    model = Chat
+    template_name = 'chat_detail.html'
+    context_object_name = 'chat'
+
+    def get_queryset(self):
+        # показываем только чаты, в которых участвует текущий пользователь
+        return Chat.objects.filter(participants=self.request.user.profile)
+
+    def post(self, request, *args, **kwargs):
+        """Обработка отправки сообщений."""
+        self.object = self.get_object()  # получаем чат
         content = request.POST.get('content', '')
         image = request.FILES.get('image')
         if content or image:
-            Message.objects.create(chat=chat, sender=request.user.profile, content=content, image=image)
-    messages = chat.messages.all().order_by('timestamp')
-    return render(request, 'chat_detail.html', {'chat': chat, 'messages': messages})
+            Message.objects.create(
+                chat=self.object,
+                sender=request.user.profile,
+                content=content,
+                image=image
+            )
+        return redirect('chat_detail', pk=self.object.pk)
 
-@login_required
-def update_profile(request):
-    profile = request.user.profile
-    if request.method == 'POST':
-        form = ProfileUpdateForm(request.POST, request.FILES, instance=profile)
-        if form.is_valid():
-            form.save()
-            return redirect('chat_list')
-    else:
-        form = ProfileUpdateForm(instance=profile)
-    return render(request, 'profile_form.html', {'form': form})
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['messages'] = self.object.messages.all().order_by('timestamp')
+        return context
+
+# --- Профиль (UpdateView) --- #
+class ProfileUpdateView(LoginRequiredMixin, UpdateView):
+    model = Profile
+    form_class = ProfileUpdateForm
+    template_name = 'profile_form.html'
+    success_url = reverse_lazy('chat_list')
+
+    def get_object(self, queryset=None):
+        return self.request.user.profile
+
+# --- Поиск пользователей (CBV) --- #
+class UserSearchView(LoginRequiredMixin, ListView):
+    model = Profile
+    template_name = 'user_search.html'
+    context_object_name = 'profiles'
+
+    def get_queryset(self):
+        query = self.request.GET.get('q', '')
+        if query:
+            return Profile.objects.filter(display_name__icontains=query).exclude(user=self.request.user)
+        return Profile.objects.none()
+
+# --- Пример создания/просмотра постов --- #
+class CreatePostView(LoginRequiredMixin, CreateView):
+    model = Post
+    fields = ['content', 'image', 'privacy']  # минимальный набор, или сделайте форму
+    template_name = 'create_post.html'
+    success_url = reverse_lazy('post_feed')
+
+    def form_valid(self, form):
+        form.instance.owner = self.request.user.profile
+        return super().form_valid(form)
+
+class PostFeedView(LoginRequiredMixin, ListView):
+    model = Post
+    template_name = 'post_feed.html'
+    context_object_name = 'posts'
+
+    def get_queryset(self):
+        # public posts
+        public_posts = Post.objects.filter(privacy='public')
+        # close friend posts (если текущий user в close_friends автора или сам автор)
+        close_posts = Post.objects.filter(
+            privacy='close'
+        ).filter(
+            Q(owner__close_friends=self.request.user.profile) | Q(owner=self.request.user.profile)
+        )
+        return (public_posts | close_posts).order_by('-created_at')
+
+# --- Работа с сессией. Можно объединить в один View или сделать два ---
+class SetLastChatView(LoginRequiredMixin, View):
+    def get(self, request, chat_id):
+        request.session['last_chat_id'] = chat_id
+        return HttpResponse(f"Last chat set to {chat_id}")
+
+    # Или метод post, если хотите
+    def post(self, request, chat_id):
+        request.session['last_chat_id'] = chat_id
+        return HttpResponse(f"Last chat set to {chat_id}")
+
+class GetLastChatView(LoginRequiredMixin, View):
+    def get(self, request):
+        last_chat = request.session.get('last_chat_id', None)
+        return HttpResponse(f"Last visited chat id is {last_chat}")
 
 
-@login_required
-def user_search(request):
-    query = request.GET.get('q', '')
-    results = []
-    if query:
-        # Search in the display_name field (you can extend to search by username or email)
-        results = Profile.objects.filter(display_name__icontains=query).exclude(user=request.user)
-    return render(request, 'user_search.html', {'profiles': results, 'query': query})
-
+# --- Функция для старта чата (можно переписать на CBV) ---
 @login_required
 def start_or_resume_chat(request, profile_id):
     target_profile = get_object_or_404(Profile, id=profile_id)
     my_profile = request.user.profile
-
-    # Check if a chat exists that includes both the current user and the target user.
+    # Проверяем, есть ли уже чат
     chat = Chat.objects.filter(participants=my_profile).filter(participants=target_profile).first()
     if not chat:
-        # If no chat exists, create a new one
         chat = Chat.objects.create()
         chat.participants.add(my_profile, target_profile)
-    return redirect('chat_detail', chat_id=chat.id)
+    return redirect('chat_detail', pk=chat.id)
 
-@login_required
-def set_last_chat(request, chat_id):
-    # Store the last visited chat id in session
-    request.session['last_chat_id'] = chat_id
-    return HttpResponse(f"Last chat set to {chat_id}")
-
-@login_required
-def get_last_chat(request):
-    last_chat = request.session.get('last_chat_id', None)
-    return HttpResponse(f"Last visited chat id is {last_chat}")
-
-@login_required
-def create_post(request):
-    if request.method == 'POST':
-        content = request.POST.get('content', '')
-        privacy = request.POST.get('privacy', 'public')
-        image = request.FILES.get('image')
-        if content or image:
-            Post.objects.create(
-                owner=request.user.profile,
-                content=content,
-                image=image,
-                privacy=privacy
-            )
-            return redirect('post_feed')
-    return render(request, 'create_post.html')
-
-@login_required
-def post_feed(request):
-    # Public posts: visible to everyone.
-    public_posts = Post.objects.filter(privacy='public')
-    
-    # Close friends posts: visible if the current user is in the owner's close_friends list or if the current user is the owner.
-    close_posts = Post.objects.filter(
-        privacy='close'
-    ).filter(
-        Q(owner__close_friends=request.user.profile) | Q(owner=request.user.profile)
-    )
-    
-    # Combine the querysets and order by newest first.
-    posts = (public_posts | close_posts).order_by('-created_at')
-    return render(request, 'post_feed.html', {'posts': posts})
-
+# --- Добавить close_friend ---
 @login_required
 def add_close_friend(request, profile_id):
     friend = get_object_or_404(Profile, id=profile_id)

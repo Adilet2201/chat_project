@@ -7,11 +7,13 @@ class RegistrationForm(UserCreationForm):
     email = forms.EmailField(required=True)
     display_name = forms.CharField(max_length=100)
     profile_pic = forms.ImageField(required=False)
-    birthday = forms.DateField(required=False, widget=forms.SelectDateWidget(years=range(1900, 2025)))
+    birthday = forms.DateField(required=False,
+                               widget=forms.SelectDateWidget(years=range(1900, 2025)))
 
     class Meta:
         model = User
-        fields = ('username', 'email', 'display_name', 'profile_pic', 'birthday', 'password1', 'password2')
+        fields = ('username', 'email', 'display_name', 'profile_pic', 'birthday',
+                  'password1', 'password2')
 
     def save(self, commit=True):
         user = super().save(commit=commit)
@@ -23,6 +25,7 @@ class RegistrationForm(UserCreationForm):
                 birthday=self.cleaned_data.get('birthday'),
             )
         return user
+
 
 class ProfileUpdateForm(forms.ModelForm):
     class Meta:

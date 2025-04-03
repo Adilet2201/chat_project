@@ -1,31 +1,23 @@
-# Use the official Python image based on slim for a lightweight container.
+# Используем python:3.12-slim как базовый образ
 FROM python:3.12-slim
 
-# Set environment variables to avoid .pyc files and enable unbuffered output.
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-# Set working directory in the container.
+# Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Install system dependencies.
+# Установка системных зависимостей
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
+    libjpeg-dev \
+    zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python dependencies.
-COPY requirements.txt /app/
-RUN pip install --upgrade pip && pip install -r requirements.txt
+# Скопируем requirements и установим
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the entire project into the container.
-COPY . /app/
+# Скопируем всё содержимое проекта (manage.py, приложение и т.д.)
+COPY . /app
 
-# Collect static files (optional, only if you use them in production)
-# RUN python manage.py collectstatic --noinput
-
-# Expose port 8000 for the Django development server.
-EXPOSE 8000
-
-# Start the Django development server.
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+# По умолчанию запускаем gunicorn (или можно оставить cmd пустым и прописать в docker-compose)
+CMD ["gunicorn", "chat_project.wsgi:application", "--bind", "0.0.0.0:8000"]
