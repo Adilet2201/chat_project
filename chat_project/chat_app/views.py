@@ -1,147 +1,333 @@
+# chat_app/views.py
 from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.auth import login
-from django.contrib.auth.decorators import login_required
+from django.views.generic import (
+    CreateView, ListView, DetailView, UpdateView, View
+)
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.views.generic import ListView, DetailView, CreateView, UpdateView, View
-from django.urls import reverse_lazy
-from django.http import HttpResponse
-from django.db.models import Q
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth import login, get_user_model
+from django.http import JsonResponse, Http404
+from django.urls import reverse_lazy, reverse
+from django.db.models import Q, Count
 
-from django.contrib.auth.models import User
-from .forms import RegistrationForm, ProfileUpdateForm
+# ── Models ────────────────────────────────────────────────────────────────
 from .models import Chat, Message, Profile, Post
 
-# --- Пример CBV для регистрации --- #
+# ── Forms ─────────────────────────────────────────────────────────────────
+from .forms import ProfileForm, PostForm, CustomUserCreationForm, MessageForm
+
+# ── DRF imports ───────────────────────────────────────────────────────────
+from rest_framework import viewsets, permissions, serializers
+from .serializers import (
+    UserSerializer,
+    ProfileSerializer,
+    ChatSerializer,
+    MessageSerializer,
+    PostSerializer,
+)
+
+User = get_user_model()
+
+# ========================================================================
+# HTML VIEWS
+# ========================================================================
+
 class RegisterView(CreateView):
-    form_class = RegistrationForm
-    template_name = 'registration/register.html'
-    success_url = reverse_lazy('chat_list')
+    form_class = CustomUserCreationForm
+    template_name = "registration/register.html"
+    success_url = reverse_lazy("login")
 
     def form_valid(self, form):
-        response = super().form_valid(form)
-        # Логиним пользователя сразу
-        login(self.request, self.object)
-        return response
+        user = form.save()
+        Profile.objects.create(user=user, display_name=user.username)
+        login(self.request, user)
+        return redirect("update_profile")
 
-# --- Пример CBV для списка чатов --- #
+
 class ChatListView(LoginRequiredMixin, ListView):
     model = Chat
-    template_name = 'chat_list.html'
-    context_object_name = 'chats'
+    template_name = "chat_list.html"
+    context_object_name = "chats"
 
     def get_queryset(self):
-        return self.request.user.profile.chats.all()
-
-# --- Пример CBV для детального просмотра чата (со способностью принимать POST) --- #
-class ChatDetailView(LoginRequiredMixin, DetailView):
-    model = Chat
-    template_name = 'chat_detail.html'
-    context_object_name = 'chat'
-
-    def get_queryset(self):
-        # показываем только чаты, в которых участвует текущий пользователь
-        return Chat.objects.filter(participants=self.request.user.profile)
-
-    def post(self, request, *args, **kwargs):
-        """Обработка отправки сообщений."""
-        self.object = self.get_object()  # получаем чат
-        content = request.POST.get('content', '')
-        image = request.FILES.get('image')
-        if content or image:
-            Message.objects.create(
-                chat=self.object,
-                sender=request.user.profile,
-                content=content,
-                image=image
+        try:
+            profile = self.request.user.profile
+            return (
+                Chat.objects.filter(participants=profile)
+                .annotate(message_count=Count("messages"))
+                .order_by("-messages__timestamp")
             )
-        return redirect('chat_detail', pk=self.object.pk)
+        except Profile.DoesNotExist:
+            return Chat.objects.none()
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['messages'] = self.object.messages.all().order_by('timestamp')
-        return context
+        ctx = super().get_context_data(**kwargs)
+        try:
+            profile = self.request.user.profile
+            ctx["current_profile"] = profile
+            chatting_with = (
+                Chat.objects.filter(participants=profile)
+                .values_list("participants__id", flat=True)
+            )
+            ctx["available_profiles"] = (
+                Profile.objects.exclude(id=profile.id)
+                .exclude(id__in=chatting_with)
+            )
+        except Profile.DoesNotExist:
+            ctx["current_profile"] = None
+            ctx["available_profiles"] = Profile.objects.none()
+        return ctx
 
-# --- Профиль (UpdateView) --- #
+
+class ChatDetailView(LoginRequiredMixin, DetailView):
+    model = Chat
+    template_name = "chat_detail.html"
+    context_object_name = "chat"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        chat = self.get_object()
+        ctx["messages"] = chat.messages.order_by("timestamp")
+        ctx["message_form"] = MessageForm()
+        ctx["current_profile"] = getattr(self.request.user, "profile", None)
+        self.request.session["last_chat_id"] = chat.pk
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        chat = self.get_object()
+        profile = getattr(request.user, "profile", None)
+        if profile is None:
+            return redirect("update_profile")
+
+        form = MessageForm(request.POST, request.FILES)
+        if form.is_valid():
+            msg = form.save(commit=False)
+            msg.chat = chat
+            msg.sender = profile
+            msg.save()
+            return redirect("chat_detail", pk=chat.pk)
+
+        ctx = self.get_context_data()
+        ctx["message_form"] = form
+        return self.render_to_response(ctx)
+
+    def get_queryset(self):
+        profile = getattr(self.request.user, "profile", None)
+        return Chat.objects.filter(participants=profile) if profile else Chat.objects.none()
+
+
 class ProfileUpdateView(LoginRequiredMixin, UpdateView):
     model = Profile
-    form_class = ProfileUpdateForm
-    template_name = 'profile_form.html'
-    success_url = reverse_lazy('chat_list')
+    form_class = ProfileForm
+    template_name = "profile_form.html"
+    success_url = reverse_lazy("chat_list")
 
     def get_object(self, queryset=None):
-        return self.request.user.profile
-
-# --- Поиск пользователей (CBV) --- #
-class UserSearchView(LoginRequiredMixin, ListView):
-    model = Profile
-    template_name = 'user_search.html'
-    context_object_name = 'profiles'
-
-    def get_queryset(self):
-        query = self.request.GET.get('q', '')
-        if query:
-            return Profile.objects.filter(display_name__icontains=query).exclude(user=self.request.user)
-        return Profile.objects.none()
-
-# --- Пример создания/просмотра постов --- #
-class CreatePostView(LoginRequiredMixin, CreateView):
-    model = Post
-    fields = ['content', 'image', 'privacy']  # минимальный набор, или сделайте форму
-    template_name = 'create_post.html'
-    success_url = reverse_lazy('post_feed')
+        try:
+            return self.request.user.profile
+        except Profile.DoesNotExist:
+            raise Http404("Profile does not exist for this user.")
 
     def form_valid(self, form):
-        form.instance.owner = self.request.user.profile
+        form.instance.user = self.request.user
         return super().form_valid(form)
 
-class PostFeedView(LoginRequiredMixin, ListView):
-    model = Post
-    template_name = 'post_feed.html'
-    context_object_name = 'posts'
+
+class UserSearchView(LoginRequiredMixin, ListView):
+    model = Profile
+    template_name = "user_search.html"
+    context_object_name = "profiles"
 
     def get_queryset(self):
-        # public posts
-        public_posts = Post.objects.filter(privacy='public')
-        # close friend posts (если текущий user в close_friends автора или сам автор)
-        close_posts = Post.objects.filter(
-            privacy='close'
-        ).filter(
-            Q(owner__close_friends=self.request.user.profile) | Q(owner=self.request.user.profile)
-        )
-        return (public_posts | close_posts).order_by('-created_at')
+        q = self.request.GET.get("q")
+        if q:
+            return (
+                Profile.objects.filter(
+                    Q(display_name__icontains=q) | Q(user__username__icontains=q)
+                )
+                .exclude(user=self.request.user)
+            )
+        return Profile.objects.none()
 
-# --- Работа с сессией. Можно объединить в один View или сделать два ---
+
+@login_required
+def start_or_resume_chat(request, profile_id):
+    current = request.user.profile
+    other = get_object_or_404(Profile, pk=profile_id)
+
+    if current == other:
+        return redirect("chat_list")
+
+    chat = (
+        Chat.objects.annotate(num_participants=Count("participants"))
+        .filter(participants=current, num_participants=2)
+        .filter(participants=other)
+        .first()
+    )
+    if chat is None:
+        chat = Chat.objects.create()
+        chat.participants.add(current, other)
+
+    return redirect("chat_detail", pk=chat.pk)
+
+
 class SetLastChatView(LoginRequiredMixin, View):
-    def get(self, request, chat_id):
-        request.session['last_chat_id'] = chat_id
-        return HttpResponse(f"Last chat set to {chat_id}")
-
-    # Или метод post, если хотите
     def post(self, request, chat_id):
-        request.session['last_chat_id'] = chat_id
-        return HttpResponse(f"Last chat set to {chat_id}")
+        try:
+            Chat.objects.get(pk=chat_id, participants=request.user.profile)
+            request.session["last_chat_id"] = chat_id
+            return JsonResponse({"status": "ok"})
+        except (Chat.DoesNotExist, Profile.DoesNotExist):
+            return JsonResponse(
+                {"status": "error", "message": "Chat not found or invalid permissions"},
+                status=404,
+            )
+
 
 class GetLastChatView(LoginRequiredMixin, View):
     def get(self, request):
-        last_chat = request.session.get('last_chat_id', None)
-        return HttpResponse(f"Last visited chat id is {last_chat}")
+        chat_id = request.session.get("last_chat_id")
+        if chat_id:
+            try:
+                Chat.objects.get(pk=chat_id, participants=request.user.profile)
+                return JsonResponse({"last_chat_id": chat_id})
+            except (Chat.DoesNotExist, Profile.DoesNotExist):
+                del request.session["last_chat_id"]
+        return JsonResponse({"last_chat_id": None})
 
 
-# --- Функция для старта чата (можно переписать на CBV) ---
-@login_required
-def start_or_resume_chat(request, profile_id):
-    target_profile = get_object_or_404(Profile, id=profile_id)
-    my_profile = request.user.profile
-    # Проверяем, есть ли уже чат
-    chat = Chat.objects.filter(participants=my_profile).filter(participants=target_profile).first()
-    if not chat:
-        chat = Chat.objects.create()
-        chat.participants.add(my_profile, target_profile)
-    return redirect('chat_detail', pk=chat.id)
+class CreatePostView(LoginRequiredMixin, CreateView):
+    model = Post
+    form_class = PostForm
+    template_name = "create_post.html"
+    success_url = reverse_lazy("post_feed")
 
-# --- Добавить close_friend ---
+    def form_valid(self, form):
+        try:
+            form.instance.owner = self.request.user.profile
+            return super().form_valid(form)
+        except Profile.DoesNotExist:
+            form.add_error(None, "You need a profile to create posts.")
+            return self.form_invalid(form)
+
+
+class PostFeedView(LoginRequiredMixin, ListView):
+    model = Post
+    template_name = "post_feed.html"
+    context_object_name = "posts"
+    paginate_by = 10
+
+    def get_queryset(self):
+        try:
+            profile = self.request.user.profile
+            friend_of_ids = profile.close_friend_of.values_list("id", flat=True)
+            return (
+                Post.objects.filter(
+                    Q(privacy="public")
+                    | Q(owner=profile)
+                    | (Q(owner_id__in=friend_of_ids) & Q(privacy="close"))
+                )
+                .distinct()
+                .order_by("-created_at")
+            )
+        except Profile.DoesNotExist:
+            return Post.objects.filter(privacy="public").order_by("-created_at")
+
+
 @login_required
 def add_close_friend(request, profile_id):
-    friend = get_object_or_404(Profile, id=profile_id)
-    request.user.profile.close_friends.add(friend)
-    return redirect('user_search')
+    try:
+        current = request.user.profile
+        friend = get_object_or_404(Profile, pk=profile_id)
+        if current != friend:
+            current.close_friends.add(friend)
+    except Profile.DoesNotExist:
+        pass
+    return redirect(request.META.get("HTTP_REFERER", "chat_list"))
+
+# ========================================================================
+# API VIEWSETS
+# ========================================================================
+
+class UserViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = User.objects.all().order_by("-date_joined")
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+
+class ProfileViewSet(viewsets.ModelViewSet):
+    queryset = Profile.objects.all()
+    serializer_class = ProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def perform_update(self, serializer):
+        if self.get_object().user == self.request.user:
+            serializer.save()
+        else:
+            from rest_framework.exceptions import PermissionDenied
+
+            raise PermissionDenied("You do not have permission to edit this profile.")
+
+    def perform_create(self, serializer):
+        from rest_framework.exceptions import PermissionDenied
+
+        raise PermissionDenied("Profile creation should be linked to user registration.")
+
+
+class ChatViewSet(viewsets.ModelViewSet):
+    serializer_class = ChatSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        profile = getattr(self.request.user, "profile", None)
+        return Chat.objects.filter(participants=profile) if profile else Chat.objects.none()
+
+
+class MessageViewSet(viewsets.ModelViewSet):
+    serializer_class = MessageSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        profile = getattr(self.request.user, "profile", None)
+        if profile:
+            chat_ids = Chat.objects.filter(participants=profile).values_list("id", flat=True)
+            return Message.objects.filter(chat_id__in=chat_ids).order_by("-timestamp")
+        return Message.objects.none()
+
+    def perform_create(self, serializer):
+        profile = getattr(self.request.user, "profile", None)
+        if profile is None:
+            raise serializers.ValidationError("User profile not found.")
+
+        chat = serializer.validated_data.get("chat")
+        if not Chat.objects.filter(pk=chat.id, participants=profile).exists():
+            raise serializers.ValidationError("You are not a participant of this chat.")
+
+        serializer.save(sender=profile)
+
+
+class PostViewSet(viewsets.ModelViewSet):
+    serializer_class = PostSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        try:
+            profile = self.request.user.profile
+            friend_of_ids = profile.close_friend_of.values_list("id", flat=True)
+            return (
+                Post.objects.filter(
+                    Q(privacy="public")
+                    | Q(owner=profile)
+                    | (Q(owner_id__in=friend_of_ids) & Q(privacy="close"))
+                )
+                .distinct()
+                .order_by("-created_at")
+            )
+        except Profile.DoesNotExist:
+            return Post.objects.filter(privacy="public").order_by("-created_at")
+
+    def perform_create(self, serializer):
+        profile = getattr(self.request.user, "profile", None)
+        if profile is None:
+            raise serializers.ValidationError("User profile not found.")
+        serializer.save(owner=profile)

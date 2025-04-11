@@ -1,4 +1,4 @@
-version: '3.9'
+version: "3.9"
 
 services:
   db:
@@ -25,11 +25,10 @@ services:
     networks:
       - my_network
 
-  minio:  
+  minio:
     image: minio/minio:latest
     container_name: my_minio
-    env_file:
-      - .env.dev
+    env_file: .env.dev
     command: server /data --console-address ":9001"
     ports:
       - "9000:9000"
@@ -51,7 +50,7 @@ services:
       - ./chat_project:/app
     depends_on:
       - db
-      - minio  # 👈 добавил minio как зависимость
+      - minio  
     networks:
       - my_network
 
@@ -60,6 +59,7 @@ services:
     container_name: my_nginx
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./chat_project/staticfiles:/app/staticfiles
     ports:
       - "80:80"
     depends_on:
@@ -69,7 +69,7 @@ services:
 
 volumes:
   postgres_data:
-  minio_data:  
+  minio_data:
 
 networks:
   my_network:
